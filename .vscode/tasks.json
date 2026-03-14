@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "▶ Start HA (9123)",
+            "type": "shell",
+            "command": "hass -c /config",
+            "problemMatcher": []
+        },
+        {
+            "label": "⏼ Restart HA",
+            "type": "shell",
+            "command": "pkill hass ; hass -c /config",
+            "problemMatcher": []
+        },
+        {
+            "label": "⏹ Stop HA",
+            "type": "shell",
+            "command": "pkill hass",
+            "problemMatcher": []
+        }
+    ]
+}

@@ -1,0 +1,12 @@
+{
+  "domain": "proxy_scripts",
+  "name": "Proxy Scripts",
+  "version": "0.1.0",
+  "documentation": "This component allows you to proxy HTTP requests to run scripts and get their output. It can be used to expose the output of scripts as HTTP endpoints.",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": [
+    "@you"
+  ],
+  "config_flow": false
+}

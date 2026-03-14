@@ -1,0 +1,31 @@
+default_config:
+
+input_text:
+  umami_share_url:
+    name: umami_share_url
+    initial: !secret umami_share_url
+
+proxy_scripts:
+- id: umami_views
+  script: /config/scripts/umami.py --days 30 --data pageviews --chartjs
+  args:
+  - !secret umami_share_url
+- id: umami_top_pages
+  script: /config/scripts/umami.py --days 30 --data pages
+  args:
+  - !secret umami_share_url
+- id: umami_top_path_with_titles
+  script: /config/scripts/umami.py --days 30 --data path_with_titles
+  args:
+  - !secret umami_share_url
+
+command_line:
+- sensor:
+    name: "Umami - Visiteurs (30 jours)"
+    unique_id: sensor_umami_visits
+    command: "/config/scripts/umami.py --days 30 {{ states('input_text.umami_share_url') }}"
+    scan_interval: 300
+    value_template: "{{ value_json.visitors }}"
+    unit_of_measurement: "visiteurs"
+
+
