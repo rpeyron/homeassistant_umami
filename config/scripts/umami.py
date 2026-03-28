@@ -41,9 +41,12 @@ def cache_write(cache_dir: Path, cache_key: str, data: dict, ttl: int = 300):
     except:
         pass
 
-def cache_key(share_id: str, endpoint: str, params: dict) -> str:
+def cache_key(share_id: str, endpoint: str, params: dict = None, body: dict = None) -> str:
+    params = params if isinstance(params, dict) else {}
+    body = body if isinstance(body, dict) else {}
     param_str = json.dumps(params, sort_keys=True)
-    return hashlib.md5(f"{share_id}:{endpoint}:{param_str}".encode()).hexdigest()
+    body_str = json.dumps(body, sort_keys=True)
+    return hashlib.md5(f"{share_id}:{endpoint}:{param_str}:{body_str}".encode()).hexdigest()
 
 # ==================== MAIN CLASS (RAW DATA UNIQUEMENT) ====================
 # https://umami.is/docs/api/website-stats
@@ -74,6 +77,12 @@ class UmamiShareStatsFetcher:
         end = datetime.now(tz).replace(hour=23, minute=59, second=59, microsecond=999999)
         start = end - timedelta(days=days)
         return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+    def _get_dates(self, days: int):
+        tz = pytz.timezone(self.timezone_str)
+        end = datetime.now(tz).replace(hour=23, minute=59, second=59, microsecond=999999)
+        start = end - timedelta(days=days)
+        return start.isoformat(), end.isoformat()
 
     def get_token_and_website(self) -> tuple:
         if self.token and self.website_id:
@@ -106,24 +115,27 @@ class UmamiShareStatsFetcher:
 
         return self.token, self.website_id
 
-    def _api_raw(self, endpoint: str, params: dict):
+    def _api_raw(self, endpoint: str, params: dict = None, method: str = 'GET', body: dict = None):
         self.get_token_and_website()
         if not self.website_id:
             raise ValueError("website_id is None!")
 
         headers = {"X-Umami-Share-Token": self.token}
         url = f"{self.api_base}{endpoint}"
-        resp = httpx.get(url, headers=headers, params=params, timeout=30)
+        if method == 'POST':
+            resp = httpx.post(url, headers=headers, params=params, json=body, timeout=30)
+        else:
+            resp = httpx.get(url, headers=headers, params=params, timeout=30)
         resp.raise_for_status()
         return resp.json()
 
-    def _api_call(self, endpoint: str, params: dict, ttl: int = 300):
+    def _api_call(self, endpoint: str, params: dict = None, ttl: int = 300, method: str = 'GET', body: dict = None):
         if self.use_cache:
-            ck = cache_key(self.share_id, endpoint, params)
+            ck = cache_key(self.share_id, f"{method}:{endpoint}", params,  body)
             cached = cache_read(self.cache_dir, ck, ttl)
             if cached is not None:
                 return cached
-        data = self._api_raw(endpoint, params)
+        data = self._api_raw(endpoint, params, method, body)
         if self.use_cache:
             cache_write(self.cache_dir, ck, data, ttl)
         return data
@@ -131,6 +143,21 @@ class UmamiShareStatsFetcher:
     def _api_website(self, info: str, params: dict, ttl: int = 300):
         self.get_token_and_website()
         return self._api_call(f"/websites/{self.website_id}/{info}", params, ttl)
+
+    def _api_breakdown(self, fields: list, start_date: str, end_date: str, parameters: dict = None, filters: dict = None, ttl: int = 300):
+        self.get_token_and_website()
+        parameters = parameters or {}
+        return self._api_call("/reports/breakdown", method='POST', ttl=ttl, body={
+                "websiteId": self.website_id,
+                "type": "breakdown",
+                "filters": filters or {},
+                "parameters": {
+                    "fields": fields,
+                    "startDate": start_date,
+                    "endDate": end_date,
+                    **parameters
+                }
+        })
 
     # ==================== RAW DATA SEULEMENT ====================
     def fetch_token(self):
@@ -152,7 +179,7 @@ class UmamiShareStatsFetcher:
             'startAt': start_ts, 'endAt': end_ts, 'unit': 'day', 'timezone': self.timezone_str
         }, ttl)
 
-    def fetch_top_pages(self, days: int, limit: int, ttl: int = 300):
+    def fetch_metric_top_path(self, days: int, limit: int, ttl: int = 300):
         """Top pages RAW (sans Chart.js)"""
         start_ts, end_ts = self._get_timestamps(days)
         return self._api_website("metrics", {
@@ -160,14 +187,15 @@ class UmamiShareStatsFetcher:
         }, ttl)
 
 
-    def fetch_top_titles(self, days: int, limit: int, ttl: int = 300):
+    def fetch_metric_top_titles(self, days: int, limit: int, ttl: int = 300):
         """Top pages RAW (sans Chart.js)"""
         start_ts, end_ts = self._get_timestamps(days)
         return self._api_website("metrics", {
             'startAt': start_ts, 'endAt': end_ts, 'type': 'title', 'limit': limit, 'timezone': self.timezone_str
         }, ttl)
 
-    def fetch_top_pages_and_titles(self, days: int, limit: int, ttl: int = 300):
+    # Deprecated, use breakdown report instead
+    def fetch_metric_top_path_titles_merged(self, days: int, limit: int, ttl: int = 300):
         """Top pages + titles RAW (sans Chart.js)"""
         start_ts, end_ts = self._get_timestamps(days)
         paths = self._api_website("metrics", {
@@ -201,6 +229,11 @@ class UmamiShareStatsFetcher:
                   'title': item['title_firstword'] or (item['title_pos'] if item['title_pos_count'] == item['count'] else None)
                   } for item in merged ]
 
+    def fetch_top_pages(self, days: int, limit: int = 10, ttl: int = 300):
+        """ Top Page url with titles with breakdown API """
+        start_date, end_date = self._get_dates(days)
+        pages = self._api_breakdown(['path', 'title'], start_date, end_date)
+        return pages[:limit]
 
 # ==================== CHART.JS CONVERSION (GLOBALES) ====================
 def to_chartjs_convert_time(time, timezone_str: str = 'Europe/Paris'):
@@ -253,7 +286,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Umami Analytics + Chart.js")
     parser.add_argument("share_url")
     parser.add_argument("--days", type=int, default=7, help="Number of days to fetch (default: 7)")
-    parser.add_argument("--data", choices=['stats','info', 'token', 'pageviews', 'pages', 'titles', 'path_with_titles'], default='stats', help="Type of data to fetch (default: stats)")
+    parser.add_argument("--data", choices=['stats','info', 'token', 'pageviews', 'path', 'titles', 'path_with_titles', 'pages'], default='stats', help="Type of data to fetch (default: stats)")
     parser.add_argument("--chartjs", action='store_true', help="Chart.js output format for compatible data (pageviews)", default=False)
     parser.add_argument("--limit", type=int, default=10, help="Limit for metrics (default: 10)")
     parser.add_argument("--ttl", type=int, default=300, help="Cache TTL in seconds (default: 300)")
@@ -273,12 +306,14 @@ if __name__ == "__main__":
             result = fetcher.fetch_token()
         elif args.data == 'pageviews':
             result = fetcher.fetch_pageviews_history(args.days, args.ttl)
-        elif args.data == 'pages':
-            result = fetcher.fetch_top_pages(args.days, args.limit,args.ttl)
+        elif args.data == 'path':
+            result = fetcher.fetch_metric_top_path(args.days, args.limit,args.ttl)
         elif args.data == 'path_with_titles':
-            result = fetcher.fetch_top_pages_and_titles(args.days, args.limit,args.ttl)
+            result = fetcher.fetch_metric_top_path_titles_merged(args.days, args.limit,args.ttl)
         elif args.data == 'titles':
-            result = fetcher.fetch_top_titles(args.days, args.limit,args.ttl)
+            result = fetcher.fetch_metric_top_titles(args.days, args.limit,args.ttl)
+        elif args.data == 'pages':
+            result = fetcher.fetch_top_pages(args.days, args.limit, ttl=args.ttl)
         elif args.data == 'info':
             result = fetcher.fetch_website_info(args.ttl)
         else:
