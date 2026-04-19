@@ -120,7 +120,7 @@ class UmamiShareStatsFetcher:
         if not self.website_id:
             raise ValueError("website_id is None!")
 
-        headers = {"X-Umami-Share-Token": self.token}
+        headers = {"X-Umami-Share-Token": self.token, "x-umami-share-context": "1"}
         url = f"{self.api_base}{endpoint}"
         if method == 'POST':
             resp = httpx.post(url, headers=headers, params=params, json=body, timeout=30)
